@@ -218,6 +218,7 @@ export default async function PropertyDetailPage({
         <div className="mt-6">
           <PropertyGallery
             images={property.images}
+            imageMedia={property.imageMedia}
             streetViewAddress={[
               property.location.address,
               property.location.city,

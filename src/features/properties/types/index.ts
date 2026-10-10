@@ -37,6 +37,12 @@ export interface PropertyDocument {
   uploadedAt: string;
 }
 
+export interface PropertyImage {
+  id: string;
+  name: string;
+  url: string;
+}
+
 export interface Property {
   id: string;
   title: string;
@@ -52,6 +58,7 @@ export interface Property {
   sizeSqm?: number;
   sizeUnit?: "sqm" | "sqft";
   images: string[];
+  imageMedia?: PropertyImage[];
   videos?: string[];
   documents?: PropertyDocument[];
   amenities?: string[];

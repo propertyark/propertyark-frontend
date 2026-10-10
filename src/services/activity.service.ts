@@ -117,6 +117,7 @@ function findActivity(value: unknown): unknown {
     const source = record(current);
     if (
       typeof source.action === "string" ||
+      typeof source.activityType === "string" ||
       typeof source.activityId === "string"
     ) {
       return current;
@@ -146,7 +147,7 @@ function normalizeActivity(value: unknown, index = 0): AdminActivity {
   };
   const action = text(
     source,
-    ["action", "event", "eventType", "type"],
+    ["action", "activityType", "event", "eventType", "type"],
     "ACTIVITY",
   ).toUpperCase();
   const entityType = text(

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { chatService, normalizeChatMessage } from "@/services/chat.service";
+import { adminService } from "@/services/admin.service";
 import { propertyService } from "@/services/property.service";
 import type {
   ChatMessage,
@@ -275,8 +276,12 @@ export function useCreateSupportRequest() {
 export function usePendingSupportRequests(
   status: ChatSessionStatus = "PENDING",
 ) {
+  const currentUserId = useAuthStore(
+    (state) => state.userId ?? state.user?.id ?? "",
+  );
+
   return useQuery({
-    queryKey: chatKeys.support(status),
+    queryKey: [...chatKeys.support(status), currentUserId],
     queryFn: async () => {
       const requests = await chatService.getPendingSupport(status);
 
@@ -287,16 +292,49 @@ export function usePendingSupportRequests(
           try {
             const session = await chatService.resolveSupportSession(request);
             const messages = await chatService.getMessages(session.id);
-            const latest = [...messages].sort(
+            const ordered = [...messages].sort(
+              (a, b) =>
+                new Date(a.createdAt).getTime() -
+                new Date(b.createdAt).getTime(),
+            );
+            const latest = [...ordered].sort(
               (a, b) =>
                 new Date(b.createdAt).getTime() -
                 new Date(a.createdAt).getTime(),
             )[0];
-            if (!latest) return { ...request, id: session.id };
+            const requesterMessage = ordered.find(
+              (message) =>
+                message.senderId &&
+                message.senderId !== currentUserId &&
+                message.senderId !== request.assignedStaff?.id,
+            );
+            const requester =
+              request.requester ??
+              request.participant ??
+              (requesterMessage
+                ? {
+                    id: requesterMessage.senderId,
+                    name: requesterMessage.senderName,
+                    avatarUrl: requesterMessage.senderAvatarUrl,
+                    role: "USER",
+                    isOnline: false,
+                  }
+                : null);
+
+            if (!latest) {
+              return {
+                ...request,
+                id: session.id,
+                requester,
+                participant: requester,
+              };
+            }
 
             return {
               ...request,
               id: session.id,
+              requester,
+              participant: requester,
               lastMessage: decodeMessageContent(latest.content).text,
               updatedAt: latest.createdAt,
             };
@@ -312,9 +350,67 @@ export function usePendingSupportRequests(
 }
 
 export function useAvailableStaff() {
+  const role = useAuthStore((state) => state.role);
+
   return useQuery({
-    queryKey: chatKeys.availableStaff,
-    queryFn: chatService.getAvailableStaff,
+    queryKey: [...chatKeys.availableStaff, role],
+    queryFn: async () => {
+      const [availabilityResult, directoryResult] = await Promise.allSettled([
+        chatService.getAvailableStaff(),
+        role === "admin"
+          ? adminService.getUsers(1, 1000)
+          : Promise.resolve({ users: [] }),
+      ]);
+      const availableStaff =
+        availabilityResult.status === "fulfilled"
+          ? availabilityResult.value
+          : [];
+      const directoryStaff =
+        directoryResult.status === "fulfilled"
+          ? directoryResult.value.users
+              .filter((user) =>
+                ["ADMIN", "STAFF"].includes(user.role.toUpperCase()),
+              )
+              .map((user) => ({
+                id: user.id,
+                name: user.fullName,
+                avatarUrl: user.avatar ?? null,
+                role: user.role.toUpperCase(),
+                isOnline: false,
+                isAvailable: false,
+                maxChats: 0,
+                activeChats: 0,
+              }))
+          : [];
+      const staffById = new Map(
+        directoryStaff.map((member) => [member.id, member]),
+      );
+
+      availableStaff.forEach((member) => {
+        staffById.set(member.id, {
+          ...staffById.get(member.id),
+          ...member,
+        });
+      });
+
+      if (!staffById.size) {
+        throw (
+          (availabilityResult.status === "rejected"
+            ? availabilityResult.reason
+            : null) ??
+          (directoryResult.status === "rejected"
+            ? directoryResult.reason
+            : new Error("No staff accounts were returned."))
+        );
+      }
+
+      return [...staffById.values()].sort((first, second) => {
+        if (first.isAvailable !== second.isAvailable) {
+          return first.isAvailable ? -1 : 1;
+        }
+        return first.name.localeCompare(second.name);
+      });
+    },
     staleTime: 15_000,
   });
 }

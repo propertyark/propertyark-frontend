@@ -556,7 +556,11 @@ function PropertyMedia({
         </CardContent>
       </Card>
       <PropertyImageLightbox
-        images={images.map((image) => normalizePropertyMediaUrl(image.url))}
+        images={images.map((image) => ({
+          id: image.id,
+          name: image.name,
+          url: normalizePropertyMediaUrl(image.url),
+        }))}
         initialIndex={selectedImage}
         open={lightboxOpen}
         onOpenChange={setLightboxOpen}

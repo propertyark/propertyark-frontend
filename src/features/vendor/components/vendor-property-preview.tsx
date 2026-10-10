@@ -88,7 +88,10 @@ export function VendorPropertyPreview({ propertyId }: { propertyId: string }) {
       </div>
 
       <PropertyHeader property={property} />
-      <PropertyGallery images={property.images} />
+      <PropertyGallery
+        images={property.images}
+        imageMedia={property.imageMedia}
+      />
 
       <div className="grid gap-8 lg:grid-cols-[1fr_360px]">
         <div className="flex flex-col gap-8">

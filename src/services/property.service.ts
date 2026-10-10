@@ -40,7 +40,13 @@ function asRecord(value: unknown): UnknownRecord {
 
 function normalizeMediaItem(value: unknown): PropertyMediaResponse | null {
   if (typeof value === "string" && value.trim()) {
-    return { id: value, url: value, type: "IMAGE", isPrimary: false };
+    return {
+      id: value,
+      name: fileNameFromUrl(value),
+      url: value,
+      type: "IMAGE",
+      isPrimary: false,
+    };
   }
 
   const media = asRecord(value);
@@ -67,6 +73,12 @@ function normalizeMediaItem(value: unknown): PropertyMediaResponse | null {
 
   return {
     id,
+    name: String(
+      media.name ??
+        media.fileName ??
+        media.originalName ??
+        fileNameFromUrl(url),
+    ),
     url: normalizePropertyMediaUrl(url),
     type,
     isPrimary: Boolean(
@@ -638,6 +650,10 @@ export const propertyService = {
   },
   setPrimaryMedia: async (mediaId: string) => {
     const { data } = await api.patch(`/properties/media/${mediaId}/primary`);
+    return data;
+  },
+  renameMedia: async (mediaId: string, name: string) => {
+    const { data } = await api.patch(`/properties/media/${mediaId}`, { name });
     return data;
   },
   bulkDeleteMedia: async (propertyId: string, mediaIds: string[]) => {

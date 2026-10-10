@@ -76,6 +76,7 @@ import {
 } from "@/features/vendor/hooks/use-vendor-properties";
 import type { PropertyMediaResponse } from "@/features/properties/types/api";
 import { PropertyDescriptionContent } from "@/features/properties/components/property-description-content";
+import { propertyImageUploadName } from "@/features/properties/lib/property-image-categories";
 import { getAmenityIcon } from "@/features/properties/utils/amenity-icons";
 import {
   PropertyFileList,
@@ -166,6 +167,9 @@ export function AddPropertyWizard({
     [],
   );
   const [deletingMediaIds, setDeletingMediaIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [renamingMediaIds, setRenamingMediaIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [settingPrimaryMediaId, setSettingPrimaryMediaId] = useState<
@@ -528,6 +532,59 @@ export function AddPropertyWizard({
   };
   const reorderPhotos = (fromIndex: number, toIndex: number) => {
     setPhotos((current) => moveItem(current, fromIndex, toIndex));
+  };
+  const renamePhoto = (index: number, name: string) => {
+    setPhotos((current) =>
+      current.map((file, currentIndex) =>
+        currentIndex === index
+          ? new File([file], propertyImageUploadName(file, name), {
+              type: file.type,
+              lastModified: file.lastModified,
+            })
+          : file,
+      ),
+    );
+  };
+  const renameExistingImage = async (mediaId: string, name: string) => {
+    if (!initialPropertyId || renamingMediaIds.has(mediaId)) return;
+
+    setRenamingMediaIds((current) => new Set(current).add(mediaId));
+    try {
+      await propertyService.renameMedia(mediaId, name);
+      setExistingMedia((current) =>
+        current.map((item) => (item.id === mediaId ? { ...item, name } : item)),
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["properties", "available"],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["vendor", "property-preview", initialPropertyId],
+        }),
+        ...(accountKey
+          ? [
+              queryClient.invalidateQueries({
+                queryKey: vendorPropertiesQueryKey(accountKey),
+              }),
+              queryClient.invalidateQueries({
+                queryKey: vendorDashboardQueryKey(accountKey),
+              }),
+            ]
+          : []),
+      ]);
+      toast.success("Image name and category updated.");
+    } catch (error) {
+      toast.error(
+        getApiErrorMessage(error, "The image name could not be updated."),
+      );
+      throw error;
+    } finally {
+      setRenamingMediaIds((current) => {
+        const next = new Set(current);
+        next.delete(mediaId);
+        return next;
+      });
+    }
   };
   const reorderExistingImages = async (fromIndex: number, toIndex: number) => {
     if (!initialPropertyId || settingPrimaryMediaId) return;
@@ -1342,8 +1399,28 @@ export function AddPropertyWizard({
               onFiles={(files) => addMedia("videos", files)}
             />
             <PropertyTipCard title="Tips for better listings">
-              Bright, wide-angle photos usually attract more inquiries. Use a
-              clear exterior or living-room image as your cover.
+              <div className="flex flex-col gap-3">
+                <p>
+                  Bright, wide-angle photos usually attract more inquiries. Use
+                  a clear exterior or living-room image as your cover.
+                </p>
+                <div className="flex flex-col gap-1">
+                  <p className="font-medium text-foreground">
+                    How to categorize your images
+                  </p>
+                  <ol className="flex list-decimal flex-col gap-1 pl-5">
+                    <li>Upload your property images.</li>
+                    <li>
+                      Click the pencil icon on an image and select its section,
+                      such as Bedroom, Kitchen, or Exterior.
+                    </li>
+                    <li>
+                      Keep the suggested name or enter a clear name such as
+                      “Bedroom 1”. The gallery will group it automatically.
+                    </li>
+                  </ol>
+                </div>
+              </div>
             </PropertyTipCard>
           </div>
           <Card>
@@ -1362,7 +1439,8 @@ export function AddPropertyWizard({
                 <div className="flex flex-col gap-2">
                   <p className="text-xs text-muted-foreground">
                     Drag a saved photo into the first position, or use the arrow
-                    controls, to make it the property cover.
+                    controls, to make it the property cover. Use the pencil to
+                    name and categorize each image.
                   </p>
                   <ReorderablePropertyPhotoGrid
                     photos={existingMedia
@@ -1370,9 +1448,12 @@ export function AddPropertyWizard({
                       .map((item, index): ReorderablePropertyPhoto => ({
                         id: item.id,
                         src: item.url,
-                        alt: `Existing property photo ${index + 1}`,
+                        name: item.name,
+                        alt:
+                          item.name || `Existing property photo ${index + 1}`,
                         isBusy:
                           deletingMediaIds.has(item.id) ||
+                          renamingMediaIds.has(item.id) ||
                           settingPrimaryMediaId !== null,
                       }))}
                     coverLabel="Current cover"
@@ -1385,6 +1466,9 @@ export function AddPropertyWizard({
                       );
                       if (media) void deleteExistingMedia(media);
                     }}
+                    onRename={(photo, _index, name) =>
+                      renameExistingImage(photo.id, name)
+                    }
                   />
                 </div>
               )}
@@ -1392,13 +1476,15 @@ export function AddPropertyWizard({
                 <div className="flex flex-col gap-2">
                   <p className="text-xs text-muted-foreground">
                     Drag photos or use the arrow controls to arrange their
-                    upload order.
+                    upload order. Use the pencil to name and categorize each
+                    image before uploading.
                   </p>
                   <ReorderablePropertyPhotoGrid
                     photos={photoUrls.map(
                       ({ file, url }): ReorderablePropertyPhoto => ({
                         id: url,
                         src: url,
+                        name: file.name,
                         alt: file.name,
                         unoptimized: true,
                       }),
@@ -1414,6 +1500,7 @@ export function AddPropertyWizard({
                         current.filter((_, photoIndex) => photoIndex !== index),
                       )
                     }
+                    onRename={(_photo, index, name) => renamePhoto(index, name)}
                   />
                 </div>
               ) : existingMedia.some((item) => item.type === "IMAGE") ? null : (

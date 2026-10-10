@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, type TouchEvent } from "react";
+import { useEffect, useState, useMemo, type TouchEvent } from "react";
 import Image from "next/image";
 import { showPropertyImageFallback } from "@/features/properties/utils/normalize-property-response";
 import {
@@ -13,11 +13,18 @@ import {
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import type { PropertyImage } from "@/features/properties/types";
+import {
+  PROPERTY_IMAGE_CATEGORIES,
+  propertyImageCategoryFromName,
+  type PropertyImageCategory,
+} from "@/features/properties/lib/property-image-categories";
 import { cn } from "@/lib/utils";
 
 interface PropertyImageLightboxProps {
-  images: string[];
+  images: PropertyImage[];
   initialIndex: number;
+  initialCategory?: PropertyImageCategory | "All";
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -30,6 +37,7 @@ const ZOOM_STEP = 0.25;
 export function PropertyImageLightbox({
   images,
   initialIndex,
+  initialCategory = "All",
   open,
   onOpenChange,
 }: PropertyImageLightboxProps) {
@@ -39,6 +47,7 @@ export function PropertyImageLightbox({
         <PropertyImageLightboxContent
           images={images}
           initialIndex={initialIndex}
+          initialCategory={initialCategory}
           onClose={() => onOpenChange(false)}
         />
       ) : null}
@@ -47,49 +56,90 @@ export function PropertyImageLightbox({
 }
 
 interface PropertyImageLightboxContentProps {
-  images: string[];
+  images: PropertyImage[];
   initialIndex: number;
+  initialCategory: PropertyImageCategory | "All";
   onClose: () => void;
 }
 
 function PropertyImageLightboxContent({
   images,
   initialIndex,
+  initialCategory,
   onClose,
 }: PropertyImageLightboxContentProps) {
-  const [index, setIndex] = useState(initialIndex);
+  const [category, setCategory] = useState<PropertyImageCategory | "All">(
+    initialCategory,
+  );
+  const filteredImages = useMemo(
+    () =>
+      category === "All"
+        ? images
+        : images.filter(
+            (image) => propertyImageCategoryFromName(image.name) === category,
+          ),
+    [category, images],
+  );
+  const categories = PROPERTY_IMAGE_CATEGORIES.filter((candidate) =>
+    images.some(
+      (image) => propertyImageCategoryFromName(image.name) === candidate,
+    ),
+  );
+  const [index, setIndex] = useState(
+    initialCategory === "All" ? initialIndex : 0,
+  );
   const [zoom, setZoom] = useState(MIN_ZOOM);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
 
-  const goPrev = useCallback(() => {
-    setIndex((i) => (i === 0 ? images.length - 1 : i - 1));
+  function goPrev() {
+    setIndex((i) => (i === 0 ? filteredImages.length - 1 : i - 1));
     setZoom(MIN_ZOOM);
-  }, [images.length]);
+  }
 
-  const goNext = useCallback(() => {
-    setIndex((i) => (i === images.length - 1 ? 0 : i + 1));
+  function goNext() {
+    setIndex((i) => (i === filteredImages.length - 1 ? 0 : i + 1));
     setZoom(MIN_ZOOM);
-  }, [images.length]);
+  }
 
-  const zoomIn = useCallback(() => {
+  function selectCategory(nextCategory: PropertyImageCategory | "All") {
+    setCategory(nextCategory);
+    setIndex(0);
+    setZoom(MIN_ZOOM);
+  }
+
+  function zoomIn() {
     setZoom((value) => Math.min(MAX_ZOOM, value + ZOOM_STEP));
-  }, []);
+  }
 
-  const zoomOut = useCallback(() => {
+  function zoomOut() {
     setZoom((value) => Math.max(MIN_ZOOM, value - ZOOM_STEP));
-  }, []);
+  }
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "ArrowLeft") goPrev();
-      if (e.key === "ArrowRight") goNext();
-      if (e.key === "+" || e.key === "=") zoomIn();
-      if (e.key === "-") zoomOut();
+      if (e.key === "ArrowLeft") {
+        setIndex((current) =>
+          current === 0 ? filteredImages.length - 1 : current - 1,
+        );
+        setZoom(MIN_ZOOM);
+      }
+      if (e.key === "ArrowRight") {
+        setIndex((current) =>
+          current === filteredImages.length - 1 ? 0 : current + 1,
+        );
+        setZoom(MIN_ZOOM);
+      }
+      if (e.key === "+" || e.key === "=") {
+        setZoom((value) => Math.min(MAX_ZOOM, value + ZOOM_STEP));
+      }
+      if (e.key === "-") {
+        setZoom((value) => Math.max(MIN_ZOOM, value - ZOOM_STEP));
+      }
       if (e.key === "0") setZoom(MIN_ZOOM);
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [goPrev, goNext, zoomIn, zoomOut]);
+  }, [filteredImages.length]);
 
   function handleTouchStart(e: TouchEvent) {
     setTouchStartX(e.touches[0].clientX);
@@ -155,12 +205,44 @@ function PropertyImageLightboxContent({
         </Button>
       </div>
 
+      <div className="absolute left-2 right-2 top-14 z-20 overflow-x-auto sm:left-16 sm:right-16">
+        <div className="mx-auto flex w-max max-w-full gap-1 rounded-xl bg-black/55 p-1 backdrop-blur-sm">
+          <Button
+            type="button"
+            size="sm"
+            variant={category === "All" ? "secondary" : "ghost"}
+            className={cn(
+              category !== "All" &&
+                "text-white hover:bg-white/15 hover:text-white",
+            )}
+            onClick={() => selectCategory("All")}
+          >
+            All
+          </Button>
+          {categories.map((candidate) => (
+            <Button
+              key={candidate}
+              type="button"
+              size="sm"
+              variant={category === candidate ? "secondary" : "ghost"}
+              className={cn(
+                category !== candidate &&
+                  "text-white hover:bg-white/15 hover:text-white",
+              )}
+              onClick={() => selectCategory(candidate)}
+            >
+              {candidate}
+            </Button>
+          ))}
+        </div>
+      </div>
+
       <div
-        className="relative flex h-full min-h-0 w-full items-center justify-center px-2 pb-24 pt-16 sm:px-16 sm:pb-28"
+        className="relative flex h-full min-h-0 w-full items-center justify-center px-2 pb-28 pt-24 sm:px-16 sm:pb-32"
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
-        {images.length > 1 && (
+        {filteredImages.length > 1 && (
           <Button
             variant="ghost"
             size="icon-lg"
@@ -175,8 +257,11 @@ function PropertyImageLightboxContent({
 
         <div className="relative size-full overflow-hidden">
           <Image
-            src={images[index]}
-            alt={`Property image ${index + 1} of ${images.length}`}
+            src={filteredImages[index].url}
+            alt={
+              filteredImages[index].name ||
+              `Property image ${index + 1} of ${filteredImages.length}`
+            }
             fill
             crossOrigin="anonymous"
             unoptimized
@@ -188,7 +273,7 @@ function PropertyImageLightboxContent({
           />
         </div>
 
-        {images.length > 1 && (
+        {filteredImages.length > 1 && (
           <Button
             variant="ghost"
             size="icon-lg"
@@ -204,9 +289,9 @@ function PropertyImageLightboxContent({
 
       <div className="absolute bottom-4 left-1/2 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2">
         <div className="flex max-w-full gap-2 overflow-x-auto rounded-xl bg-black/45 p-2 backdrop-blur-sm">
-          {images.map((src, i) => (
+          {filteredImages.map((image, i) => (
             <button
-              key={src + i}
+              key={image.id}
               type="button"
               onClick={() => {
                 setIndex(i);
@@ -222,7 +307,7 @@ function PropertyImageLightboxContent({
               )}
             >
               <Image
-                src={src}
+                src={image.url}
                 alt=""
                 fill
                 sizes="80px"
@@ -236,8 +321,8 @@ function PropertyImageLightboxContent({
             </button>
           ))}
         </div>
-        <span className="rounded-full bg-black/55 px-3 py-1 font-numeric text-xs text-white backdrop-blur-sm">
-          {index + 1} / {images.length}
+        <span className="max-w-[calc(100vw-2rem)] truncate rounded-full bg-black/55 px-3 py-1 text-xs text-white backdrop-blur-sm">
+          {filteredImages[index].name}
         </span>
       </div>
     </DialogContent>

@@ -69,6 +69,10 @@ import { useAuthStore } from "@/store/auth.store";
 
 const statusOptions: ChatSessionStatus[] = ["PENDING", "ACTIVE", "RESOLVED"];
 
+function supportActionId(request: SupportRequest) {
+  return request.supportRequestId ?? request.requestId;
+}
+
 export function AdminSupportPage() {
   const [status, setStatus] = useState<ChatSessionStatus>("PENDING");
   const requestsQuery = usePendingSupportRequests(status);
@@ -77,7 +81,7 @@ export function AdminSupportPage() {
   const currentUserId = useAuthStore(
     (state) => state.userId ?? state.user?.id ?? "",
   );
-  const currentRole = useAuthStore((state) => state.role);
+  const currentUser = useAuthStore((state) => state.user);
   const [readRequestIds, setReadRequestIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -94,8 +98,20 @@ export function AdminSupportPage() {
   function accept(request: SupportRequest) {
     actions.accept.mutate(request, {
       onSuccess: (activeRequest) => {
+        const acceptedRequest: SupportRequest = {
+          ...activeRequest,
+          status: "ACTIVE",
+          assignedStaff: activeRequest.assignedStaff ?? {
+            id: currentUserId,
+            name: currentUser?.fullName || "You",
+            avatarUrl: currentUser?.avatarUrl ?? null,
+            role: "STAFF",
+            isOnline: true,
+          },
+        };
         toast.success("Support request accepted. You can reply now.");
-        setSelectedRequest(activeRequest);
+        setStatus("ACTIVE");
+        setSelectedRequest(acceptedRequest);
       },
       onError: (error) =>
         toast.error(
@@ -224,6 +240,11 @@ export function AdminSupportPage() {
               <PendingConversation
                 request={selectedRequest}
                 pending={actions.accept.isPending}
+                canAccept={Boolean(
+                  currentUserId &&
+                  (!selectedRequest.assignedStaff ||
+                    selectedRequest.assignedStaff.id === currentUserId),
+                )}
                 onBack={() => setSelectedRequest(null)}
                 onViewProfile={() => setMobileProfileOpen(true)}
                 onAccept={() => accept(selectedRequest)}
@@ -235,6 +256,17 @@ export function AdminSupportPage() {
                 embedded
                 fillAvailableHeight
                 allowCancelSupport={false}
+                canSendMessages={Boolean(
+                  currentUserId &&
+                  selectedRequest.assignedStaff?.id === currentUserId,
+                )}
+                readOnlyReason={
+                  selectedRequest.assignedStaff
+                    ? "This request is assigned to " +
+                      selectedRequest.assignedStaff.name +
+                      ". Only the staff member who accepted it can reply."
+                    : "Accept this request before replying."
+                }
                 headerAction={
                   <Button
                     variant="ghost"
@@ -266,7 +298,6 @@ export function AdminSupportPage() {
             <CustomerProfilePanel
               request={selectedRequest}
               currentUserId={currentUserId}
-              isSuperAdmin={currentRole === "admin"}
               onTransfer={(request) => setDialog({ type: "transfer", request })}
               onResolve={(request) => setDialog({ type: "resolve", request })}
             />
@@ -282,7 +313,6 @@ export function AdminSupportPage() {
           <CustomerProfilePanel
             request={selectedRequest}
             currentUserId={currentUserId}
-            isSuperAdmin={currentRole === "admin"}
             onTransfer={(request) => {
               setMobileProfileOpen(false);
               setDialog({ type: "transfer", request });
@@ -300,7 +330,11 @@ export function AdminSupportPage() {
           dialog?.type === "transfer" ? dialog.request.requestId : "transfer"
         }
         request={dialog?.type === "transfer" ? dialog.request : null}
-        staff={staffQuery.data ?? []}
+        staff={(staffQuery.data ?? []).filter(
+          (member) => member.id !== currentUserId,
+        )}
+        loading={staffQuery.isLoading}
+        loadError={staffQuery.isError}
         pending={actions.transfer.isPending}
         onClose={() => setDialog(null)}
         onTransfer={(requestId, staffId) =>
@@ -308,7 +342,11 @@ export function AdminSupportPage() {
             { requestId, staffId },
             {
               onSuccess: () => {
-                toast.success("Support request transferred.");
+                toast.success(
+                  "Support request transferred. The receiving staff member must accept it before replying.",
+                );
+                setSelectedRequest(null);
+                setMobileProfileOpen(false);
                 setDialog(null);
               },
               onError: (error) =>
@@ -325,41 +363,34 @@ export function AdminSupportPage() {
       <ResolveDialog
         key={dialog?.type === "resolve" ? dialog.request.requestId : "resolve"}
         request={dialog?.type === "resolve" ? dialog.request : null}
-        pending={actions.resolve.isPending || actions.transfer.isPending}
+        pending={actions.resolve.isPending}
         onClose={() => setDialog(null)}
         onResolve={(requestId, resolutionNote) => {
           const request = dialog?.type === "resolve" ? dialog.request : null;
-          const needsOwnership = Boolean(
-            currentRole === "admin" &&
-            currentUserId &&
-            request?.assignedStaff?.id !== currentUserId,
-          );
+          if (!request || request.assignedStaff?.id !== currentUserId) {
+            toast.error(
+              "Only the staff member who accepted this request can resolve it.",
+            );
+            return;
+          }
 
-          void (async () => {
-            try {
-              if (needsOwnership) {
-                await actions.transfer.mutateAsync({
-                  requestId,
-                  staffId: currentUserId,
-                });
-              }
-              await actions.resolve.mutateAsync({
-                requestId,
-                resolutionNote,
-              });
-              toast.success(
-                needsOwnership
-                  ? "Request assigned to you and resolved."
-                  : "Support request resolved.",
-              );
-              setSelectedRequest(null);
-              setDialog(null);
-            } catch (error) {
-              toast.error(
-                getApiErrorMessage(error, "The request could not be resolved."),
-              );
-            }
-          })();
+          actions.resolve.mutate(
+            { requestId, resolutionNote },
+            {
+              onSuccess: () => {
+                toast.success("Support request resolved.");
+                setSelectedRequest(null);
+                setDialog(null);
+              },
+              onError: (error) =>
+                toast.error(
+                  getApiErrorMessage(
+                    error,
+                    "The request could not be resolved.",
+                  ),
+                ),
+            },
+          );
         }}
       />
     </AdminWorkspace>
@@ -542,12 +573,14 @@ function SupportQueueItem({
 function PendingConversation({
   request,
   pending,
+  canAccept,
   onBack,
   onViewProfile,
   onAccept,
 }: {
   request: SupportRequest;
   pending: boolean;
+  canAccept: boolean;
   onBack: () => void;
   onViewProfile: () => void;
   onAccept: () => void;
@@ -599,10 +632,20 @@ function PendingConversation({
             {request.description || "No description was supplied."}
           </EmptyDescription>
         </EmptyHeader>
-        <Button onClick={onAccept} disabled={pending}>
-          {pending && <Spinner data-icon="inline-start" />}
-          Accept and start chatting
-        </Button>
+        {canAccept ? (
+          <Button onClick={onAccept} disabled={pending}>
+            {pending && <Spinner data-icon="inline-start" />}
+            Accept and start chatting
+          </Button>
+        ) : (
+          <div className="max-w-md rounded-xl border bg-muted/40 px-4 py-3 text-center text-sm text-muted-foreground">
+            This transferred request is waiting for{" "}
+            <span className="font-semibold text-foreground">
+              {request.assignedStaff?.name ?? "the assigned staff member"}
+            </span>{" "}
+            to accept it.
+          </div>
+        )}
       </Empty>
     </div>
   );
@@ -611,13 +654,11 @@ function PendingConversation({
 function CustomerProfilePanel({
   request,
   currentUserId,
-  isSuperAdmin,
   onTransfer,
   onResolve,
 }: {
   request: SupportRequest | null;
   currentUserId: string;
-  isSuperAdmin: boolean;
   onTransfer: (request: SupportRequest) => void;
   onResolve: (request: SupportRequest) => void;
 }) {
@@ -695,23 +736,29 @@ function CustomerProfilePanel({
         <div className="flex flex-col gap-2 border-t pt-5">
           {!assignedToCurrentUser && (
             <p className="text-xs leading-relaxed text-muted-foreground">
-              {isSuperAdmin
-                ? "Resolving this request will first assign it to your Super Admin account."
-                : "Only the assigned staff member can resolve this request. Transfer it to yourself first if you need to take ownership."}
+              Only the staff member who accepted this request can reply,
+              transfer, or resolve it.
             </p>
           )}
-          <Button variant="outline" onClick={() => onTransfer(request)}>
+          <Button
+            variant="outline"
+            onClick={() => onTransfer(request)}
+            disabled={!assignedToCurrentUser}
+            title={
+              assignedToCurrentUser
+                ? "Transfer conversation"
+                : "This request is assigned to another staff member"
+            }
+          >
             <Users data-icon="inline-start" /> Transfer conversation
           </Button>
           <Button
             onClick={() => onResolve(request)}
-            disabled={!assignedToCurrentUser && !isSuperAdmin}
+            disabled={!assignedToCurrentUser}
             title={
               assignedToCurrentUser
                 ? "Resolve request"
-                : isSuperAdmin
-                  ? "Assign this request to yourself and resolve it"
-                  : "This request is assigned to another staff member"
+                : "This request is assigned to another staff member"
             }
           >
             <Check data-icon="inline-start" /> Resolve request
@@ -765,12 +812,16 @@ function QueueEmpty({ status }: { status: ChatSessionStatus }) {
 function TransferDialog({
   request,
   staff,
+  loading,
+  loadError,
   pending,
   onClose,
   onTransfer,
 }: {
   request: SupportRequest | null;
   staff: StaffAvailability[];
+  loading: boolean;
+  loadError: boolean;
   pending: boolean;
   onClose: () => void;
   onTransfer: (requestId: string, staffId: string) => void;
@@ -782,7 +833,8 @@ function TransferDialog({
         <DialogHeader>
           <DialogTitle>Transfer support request</DialogTitle>
           <DialogDescription>
-            Select an available staff member to take over this conversation.
+            Select an available staff member. They must accept the transferred
+            request before they can reply.
           </DialogDescription>
         </DialogHeader>
         <Field>
@@ -793,12 +845,24 @@ function TransferDialog({
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                {staff.map((member) => (
-                  <SelectItem key={member.id} value={member.id}>
-                    {member.name} ({member.activeChats}/{member.maxChats || "∞"}
-                    )
+                {staff.length ? (
+                  staff.map((member) => (
+                    <SelectItem key={member.id} value={member.id}>
+                      {member.name}{" "}
+                      {member.isAvailable
+                        ? `(${member.activeChats}/${member.maxChats || "∞"} active)`
+                        : "(offline or unavailable)"}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <SelectItem value="__no-staff" disabled>
+                    {loading
+                      ? "Loading staff…"
+                      : loadError
+                        ? "Staff list could not be loaded"
+                        : "No other staff accounts available"}
                   </SelectItem>
-                ))}
+                )}
               </SelectGroup>
             </SelectContent>
           </Select>
@@ -809,7 +873,9 @@ function TransferDialog({
           </Button>
           <Button
             disabled={!request || !staffId || pending}
-            onClick={() => request && onTransfer(request.requestId, staffId)}
+            onClick={() =>
+              request && onTransfer(supportActionId(request), staffId)
+            }
           >
             {pending ? (
               <Spinner data-icon="inline-start" />
@@ -861,7 +927,9 @@ function ResolveDialog({
           </Button>
           <Button
             disabled={!request || !note.trim() || pending}
-            onClick={() => request && onResolve(request.requestId, note.trim())}
+            onClick={() =>
+              request && onResolve(supportActionId(request), note.trim())
+            }
           >
             {pending && <Spinner data-icon="inline-start" />} Resolve request
           </Button>

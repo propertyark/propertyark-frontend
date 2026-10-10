@@ -145,6 +145,10 @@ function normalizeSession(value: unknown, index = 0): ChatSession {
     source.participant ??
       source.otherParticipant ??
       source.recipient ??
+      source.requester ??
+      source.customer ??
+      source.initiator ??
+      source.createdBy ??
       source.vendor ??
       source.user,
   );
@@ -157,6 +161,15 @@ function normalizeSession(value: unknown, index = 0): ChatSession {
 
   return {
     id: text(source, ["id", "_id", "sessionId"], `session-${index}`),
+    supportRequestId:
+      identifier(source, [
+        "supportRequestId",
+        "requestId",
+        "supportRequest",
+        "supportId",
+        "supportTicketId",
+        "ticketId",
+      ]) || null,
     type: text(
       source,
       ["type", "sessionType"],
@@ -221,15 +234,24 @@ function normalizeSupportRequest(value: unknown, index = 0): SupportRequest {
   const source = asRecord(value);
   const nestedSession =
     source.session ?? source.chatSession ?? source.conversation ?? source.chat;
+  const nestedSessionSource = asRecord(nestedSession);
   const session = normalizeSession(
     nestedSession && typeof nestedSession === "object" ? nestedSession : value,
     index,
   );
-  const requestId = text(
-    source,
-    ["requestId", "supportRequestId", "id", "_id"],
-    session.id,
-  );
+  // Chat-session records use `id` for the session, but support actions expect
+  // the related support-request ID. Prefer that relation before the record ID.
+  const requestId =
+    identifier(source, [
+      "requestId",
+      "supportRequestId",
+      "supportRequest",
+      "supportId",
+      "supportTicketId",
+      "ticketId",
+    ]) ||
+    session.supportRequestId ||
+    text(source, ["id", "_id"], session.id);
   const sessionId = identifier(source, [
     "sessionId",
     "chatSessionId",
@@ -244,12 +266,71 @@ function normalizeSupportRequest(value: unknown, index = 0): SupportRequest {
     "chat",
   ]);
   const requester = normalizeParticipant(
-    source.requester ?? source.user ?? source.createdBy,
+    source.requester ??
+      source.customer ??
+      source.initiator ??
+      source.createdBy ??
+      source.user ??
+      nestedSessionSource.requester ??
+      nestedSessionSource.customer ??
+      nestedSessionSource.initiator ??
+      nestedSessionSource.createdBy ??
+      nestedSessionSource.user,
   );
+  const explicitStatus = text(
+    source,
+    ["status"],
+    text(nestedSessionSource, ["status"]),
+  );
+  const assignedStaffRecord = normalizeParticipant(
+    source.assignedStaff ??
+      source.assignedTo ??
+      source.acceptedBy ??
+      source.handledBy ??
+      source.staff ??
+      source.assignee ??
+      nestedSessionSource.assignedStaff ??
+      nestedSessionSource.assignedTo ??
+      nestedSessionSource.acceptedBy ??
+      nestedSessionSource.handledBy ??
+      nestedSessionSource.staff ??
+      nestedSessionSource.assignee,
+  );
+  const assignedStaffId =
+    identifier(source, [
+      "assignedStaffId",
+      "assignedToId",
+      "acceptedById",
+      "handledById",
+      "staffId",
+      "assigneeId",
+    ]) ||
+    identifier(nestedSessionSource, [
+      "assignedStaffId",
+      "assignedToId",
+      "acceptedById",
+      "handledById",
+      "staffId",
+      "assigneeId",
+    ]);
+  const assignedStaff =
+    assignedStaffRecord ??
+    (assignedStaffId
+      ? {
+          id: assignedStaffId,
+          name: "Assigned staff",
+          avatarUrl: null,
+          role: "STAFF",
+          isOnline: false,
+        }
+      : null);
 
   return {
     ...session,
     id: sessionId || session.id,
+    status: (
+      explicitStatus || (sessionId ? "ACTIVE" : "PENDING")
+    ).toUpperCase() as ChatSessionStatus,
     participant: requester ?? session.participant,
     requestId,
     sessionCandidates: collectIdentifierCandidates(value),
@@ -261,9 +342,7 @@ function normalizeSupportRequest(value: unknown, index = 0): SupportRequest {
       "NORMAL",
     ).toUpperCase() as SupportPriority,
     requester,
-    assignedStaff: normalizeParticipant(
-      source.assignedStaff ?? source.staff ?? source.assignee,
-    ),
+    assignedStaff,
     resolutionNote:
       text(source, ["resolutionNote", "resolution", "resolvedNote"]) || null,
   };
@@ -373,26 +452,22 @@ export const chatService = {
       );
   },
 
-  getPendingSupport(status: ChatSessionStatus = "PENDING") {
+  async getPendingSupport(status: ChatSessionStatus = "PENDING") {
     if (status !== "PENDING") {
-      return api
-        .get<unknown>("/chat/sessions", {
-          params: { type: "SUPPORT", status },
-        })
-        .then(({ data }) =>
-          findRows(data, ["sessions", "items", "results", "records"]).map(
-            normalizeSupportRequest,
-          ),
-        );
+      const { data } = await api.get<unknown>("/chat/sessions", {
+        params: { type: "SUPPORT", status },
+      });
+      return findRows(data, ["sessions", "items", "results", "records"]).map(
+        normalizeSupportRequest,
+      );
     }
 
-    return api
-      .get<unknown>("/chat/support/pending", { params: { status } })
-      .then(({ data }) =>
-        findRows(data, ["requests", "sessions", "items", "results"]).map(
-          normalizeSupportRequest,
-        ),
-      );
+    const { data } = await api.get<unknown>("/chat/support/pending", {
+      params: { status },
+    });
+    return findRows(data, ["requests", "sessions", "items", "results"])
+      .map(normalizeSupportRequest)
+      .filter((request) => request.status === "PENDING");
   },
 
   async acceptSupport(request: SupportRequest) {

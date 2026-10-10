@@ -13,6 +13,7 @@ export interface ChatParticipant {
 
 export interface ChatSession {
   id: string;
+  supportRequestId?: string | null;
   type: ChatSessionType;
   status: ChatSessionStatus;
   subject: string;

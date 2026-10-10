@@ -109,6 +109,13 @@ export function normalizePropertyResponse(property: PropertyApiItem): Property {
   const images = media
     .filter((item) => item.type === "IMAGE")
     .map((item) => normalizePropertyMediaUrl(item.url));
+  const imageMedia = media
+    .filter((item) => item.type === "IMAGE")
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      url: normalizePropertyMediaUrl(item.url),
+    }));
   const videos = media
     .filter((item) => item.type === "VIDEO")
     .map((item) => normalizePropertyMediaUrl(item.url));
@@ -134,6 +141,7 @@ export function normalizePropertyResponse(property: PropertyApiItem): Property {
     sizeSqm: property.size,
     sizeUnit: property.sizeUnit?.toLowerCase() === "sqft" ? "sqft" : "sqm",
     images: images.length ? images : [PROPERTY_IMAGE_FALLBACK],
+    imageMedia: imageMedia.length ? imageMedia : undefined,
     videos,
     videoUrl: videos[0],
     amenities: property.amenities ?? [],

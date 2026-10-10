@@ -1,5 +1,6 @@
 export interface PropertyMediaResponse {
   id: string;
+  name: string;
   type: "IMAGE" | "VIDEO";
   url: string;
   isPrimary: boolean;

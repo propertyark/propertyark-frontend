@@ -25,15 +25,14 @@ import { getApiErrorMessage } from "@/services/api-error";
 import { settingsService } from "@/services/settings.service";
 
 const emptyForm = {
-  currentPassword: "",
   newPassword: "",
-  confirmNewPassword: "",
+  confirmPassword: "",
 };
 
 export function AdminSecuritySettings() {
   const [form, setForm] = useState(emptyForm);
   const mismatch = Boolean(
-    form.confirmNewPassword && form.newPassword !== form.confirmNewPassword,
+    form.confirmPassword && form.newPassword !== form.confirmPassword,
   );
   const mutation = useMutation({
     mutationFn: settingsService.changePassword,
@@ -61,24 +60,6 @@ export function AdminSecuritySettings() {
         </CardHeader>
         <CardContent>
           <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="current-password">
-                Current password
-              </FieldLabel>
-              <Input
-                id="current-password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={form.currentPassword}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    currentPassword: event.target.value,
-                  }))
-                }
-              />
-            </Field>
             <div className="grid gap-5 md:grid-cols-2">
               <Field>
                 <FieldLabel htmlFor="new-password">New password</FieldLabel>
@@ -110,11 +91,11 @@ export function AdminSecuritySettings() {
                   autoComplete="new-password"
                   required
                   aria-invalid={mismatch}
-                  value={form.confirmNewPassword}
+                  value={form.confirmPassword}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
-                      confirmNewPassword: event.target.value,
+                      confirmPassword: event.target.value,
                     }))
                   }
                 />

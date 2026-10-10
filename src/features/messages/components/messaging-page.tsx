@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Building2,
   Headphones,
+  LockKeyhole,
   MessageCircle,
   Search,
   Send,
@@ -365,6 +366,8 @@ export function ConversationPanel({
   initialPropertyContext = null,
   fillAvailableHeight = false,
   headerAction,
+  canSendMessages = true,
+  readOnlyReason = "Accept this request before replying.",
 }: {
   session: ChatSession;
   onBack: () => void;
@@ -374,6 +377,8 @@ export function ConversationPanel({
   initialPropertyContext?: MessagePropertyContext | null;
   fillAvailableHeight?: boolean;
   headerAction?: ReactNode;
+  canSendMessages?: boolean;
+  readOnlyReason?: string;
 }) {
   const currentUserId = useAuthStore((state) => state.userId ?? state.user?.id);
   const messagesQuery = useChatMessages(session.id);
@@ -415,7 +420,7 @@ export function ConversationPanel({
   function submitMessage(event: FormEvent) {
     event.preventDefault();
     const cleanContent = content.trim();
-    if (!cleanContent || sendMessage.isPending) return;
+    if (!canSendMessages || !cleanContent || sendMessage.isPending) return;
     const outgoingContent = encodeMessageContent(
       cleanContent,
       draftPropertyContext,
@@ -502,16 +507,20 @@ export function ConversationPanel({
               className="shrink-0"
               disabled={supportActions.cancel.isPending}
               onClick={() =>
-                supportActions.cancel.mutate(session.id, {
-                  onSuccess: () => toast.success("Support request cancelled."),
-                  onError: (error) =>
-                    toast.error(
-                      getApiErrorMessage(
-                        error,
-                        "The support request could not be cancelled.",
+                supportActions.cancel.mutate(
+                  session.supportRequestId ?? session.id,
+                  {
+                    onSuccess: () =>
+                      toast.success("Support request cancelled."),
+                    onError: (error) =>
+                      toast.error(
+                        getApiErrorMessage(
+                          error,
+                          "The support request could not be cancelled.",
+                        ),
                       ),
-                    ),
-                })
+                  },
+                )
               }
             >
               {supportActions.cancel.isPending && (
@@ -652,7 +661,21 @@ export function ConversationPanel({
         onSubmit={submitMessage}
         className="flex shrink-0 flex-col gap-2 border-t bg-background p-4 sm:p-5"
       >
-        {draftPropertyContext && (
+        {!canSendMessages && (
+          <div
+            role="status"
+            className="flex items-start gap-3 rounded-xl border bg-muted/40 px-4 py-3"
+          >
+            <LockKeyhole className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <div>
+              <p className="text-sm font-semibold">Chat locked</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                {readOnlyReason}
+              </p>
+            </div>
+          </div>
+        )}
+        {canSendMessages && draftPropertyContext && (
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" asChild>
               <Link href={`/properties/${draftPropertyContext.id}`}>
@@ -695,17 +718,21 @@ export function ConversationPanel({
                 event.currentTarget.form?.requestSubmit();
               }
             }}
-            placeholder="Write a message"
+            placeholder={
+              canSendMessages ? "Write a message" : "Acceptance required"
+            }
             aria-label="Message"
             rows={1}
             className="max-h-32 min-h-11 overflow-y-auto"
-            disabled={sendMessage.isPending}
+            disabled={!canSendMessages || sendMessage.isPending}
           />
           <InputGroupAddon align="inline-end" className="pb-2">
             <Button
               type="submit"
               size="icon-sm"
-              disabled={!content.trim() || sendMessage.isPending}
+              disabled={
+                !canSendMessages || !content.trim() || sendMessage.isPending
+              }
             >
               {sendMessage.isPending ? <Spinner /> : <Send />}
               <span className="sr-only">Send message</span>

@@ -211,6 +211,14 @@ function paymentStatus(activity: AdminActivity) {
   if (
     /SUCCESS|SUCCESSFUL|COMPLETED|PAID|CREDITED|VERIFIED/.test(outcomeText) ||
     hasMarker([
+      "isSuccessful",
+      "is_successful",
+      "paymentSuccessful",
+      "payment_successful",
+      "isPaid",
+      "is_paid",
+      "paymentVerified",
+      "payment_verified",
       "paidAt",
       "paid_at",
       "completedAt",
@@ -338,6 +346,12 @@ export function transactionFrom(
       "paystack_reference",
       "purchaseNumber",
       "purchase_number",
+      "purchaseId",
+      "purchase_id",
+      "creditPurchaseId",
+      "credit_purchase_id",
+      "transactionId",
+      "transaction_id",
       // Activity records currently expose the credit-purchase record ID but
       // not the Paystack reference. Use that stable ID as the internal ref.
       "entityId",
@@ -385,6 +399,63 @@ function statusPriority(status: string) {
   if (/FAILED|CANCELLED|CANCELED|ABANDONED/.test(status)) return 2;
   if (/INITIATED|PENDING/.test(status)) return 1;
   return 0;
+}
+
+function transactionCorrelationIds(transaction: TransactionRecord) {
+  const identifiers = values(transaction.metadata, [
+    "entityId",
+    "entity_id",
+    "purchaseId",
+    "purchase_id",
+    "creditPurchaseId",
+    "credit_purchase_id",
+    "reference",
+    "ref",
+    "paymentReference",
+    "payment_reference",
+    "transactionReference",
+    "transaction_reference",
+    "transactionRef",
+    "transaction_ref",
+    "paystackReference",
+    "paystack_reference",
+    "purchaseNumber",
+    "purchase_number",
+    "transactionId",
+    "transaction_id",
+  ])
+    .filter(
+      (value): value is string | number =>
+        typeof value === "string" || typeof value === "number",
+    )
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+
+  if (transaction.reference) identifiers.push(transaction.reference);
+  return [...new Set(identifiers)];
+}
+
+function mergeTransactionRecords(
+  existing: TransactionRecord,
+  candidate: TransactionRecord,
+) {
+  const candidateWins =
+    statusPriority(candidate.status) > statusPriority(existing.status) ||
+    (statusPriority(candidate.status) === statusPriority(existing.status) &&
+      new Date(candidate.createdAt).getTime() >=
+        new Date(existing.createdAt).getTime());
+  const primary = candidateWins ? candidate : existing;
+  const fallback = candidateWins ? existing : candidate;
+
+  return {
+    ...fallback,
+    ...primary,
+    amount: primary.amount ?? fallback.amount,
+    points: primary.points ?? fallback.points,
+    reference: primary.reference ?? fallback.reference,
+    email: primary.email ?? fallback.email,
+    metadata: { ...fallback.metadata, ...primary.metadata },
+  } satisfies TransactionRecord;
 }
 
 type TransactionStatus =
@@ -468,24 +539,28 @@ export function AdminTransactionsPage() {
   const query = useAdminAllActivities();
   const transactions = useMemo(() => {
     const unique = new Map<string, TransactionRecord>();
+    const keyByIdentifier = new Map<string, string>();
     (query.data ?? [])
       .map((activity) => transactionFrom(activity, pricePerPoint))
       .filter((item): item is TransactionRecord => Boolean(item))
       .forEach((transaction) => {
-        const key = transaction.reference || transaction.id;
+        const identifiers = transactionCorrelationIds(transaction);
+        const key =
+          identifiers
+            .map((identifier) => keyByIdentifier.get(identifier))
+            .find(Boolean) ??
+          transaction.reference ??
+          transaction.id;
         const existing = unique.get(key);
-        const transactionPriority = statusPriority(transaction.status);
-        const existingPriority = existing
-          ? statusPriority(existing.status)
-          : -1;
-        if (
-          !existing ||
-          transactionPriority > existingPriority ||
-          (transactionPriority === existingPriority &&
-            new Date(transaction.createdAt).getTime() >=
-              new Date(existing.createdAt).getTime())
-        )
-          unique.set(key, transaction);
+        unique.set(
+          key,
+          existing
+            ? mergeTransactionRecords(existing, transaction)
+            : transaction,
+        );
+        identifiers.forEach((identifier) =>
+          keyByIdentifier.set(identifier, key),
+        );
       });
     return Array.from(unique.values()).sort(
       (first, second) =>
